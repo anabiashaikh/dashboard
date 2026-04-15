@@ -111,7 +111,7 @@ export default function MiniChartCard({ config, onClick }: MiniChartProps) {
     svg.selectAll('.mini-bar').data(data).enter().append('rect')
       .attr('class','mini-bar')
       .attr('x', d => x(d.year) - barW / 2).attr('width', barW)
-      .attr('y', H).attr('height',0).attr('rx',2)
+      .attr('y', H).attr('height',0).attr('rx',3).attr('ry',3)
       .attr('fill', d => d.status === 'past' ? `url(#${pastGradId})` : `url(#${futGradId})`)
       .transition().duration(900).ease(d3.easeCubicOut)
       .attr('y', d => y(d.value)).attr('height', d => H - y(d.value));

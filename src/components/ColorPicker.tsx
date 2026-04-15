@@ -1,73 +1,215 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 
 interface ColorPickerProps {
   color: string;
   onChange: (color: string | null) => void;
 }
 
+// --- Utils ---
 function hexToRgb(hex: string) {
-  const r = parseInt(hex.slice(0,2), 16);
-  const g = parseInt(hex.slice(2,4), 16);
-  const b = parseInt(hex.slice(4,6), 16);
+  const r = parseInt(hex.slice(0, 2), 16);
+  const g = parseInt(hex.slice(2, 4), 16);
+  const b = parseInt(hex.slice(4, 6), 16);
   return { r, g, b };
 }
 
 function rgbToHex(r: number, g: number, b: number) {
-  return [r,g,b].map(v => v.toString(16).padStart(2,'0')).join('');
+  return [r, g, b].map(v => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')).join('');
 }
 
-const PRESETS = ['#e74c3c','#e67e22','#f1c40f','#7d4f1e','#2ecc71','#1a5c2a','#9b59b6','#6c5ce7','#3498db','#00cec9','#55efc4','#000000','#636e72','#b2bec3','#ffffff'];
+// RGB [0,255] -> HSV [0,360], [0,1], [0,1]
+function rgbToHsv(r: number, g: number, b: number) {
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  const d = max - min;
+  let h = 0;
+  const s = max === 0 ? 0 : d / max;
+  const v = max;
+
+  if (max !== min) {
+    switch (max) {
+      case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+      case g: h = (b - r) / d + 2; break;
+      case b: h = (r - g) / d + 4; break;
+    }
+    h /= 6;
+  }
+  return { h: h * 360, s, v };
+}
+
+// HSV -> RGB
+function hsvToRgb(h: number, s: number, v: number) {
+  h /= 360;
+  const i = Math.floor(h * 6);
+  const f = h * 6 - i;
+  const p = v * (1 - s);
+  const q = v * (1 - f * s);
+  const t = v * (1 - (1 - f) * s);
+  let r = 0, g = 0, b = 0;
+  switch (i % 6) {
+    case 0: r = v; g = t; b = p; break;
+    case 1: r = q; g = v; b = p; break;
+    case 2: r = p; g = v; b = t; break;
+    case 3: r = p; g = q; b = v; break;
+    case 4: r = t; g = p; b = v; break;
+    case 5: r = v; g = p; b = q; break;
+  }
+  return { r: r * 255, g: g * 255, b: b * 255 };
+}
+
+const PRESETS = [
+  '#00AD07', '#EA4335', '#FBBC04', '#F9AB00', '#FFD600', '#4CAF50', '#2E7D32', '#009688',
+  '#4285F4', '#1A73E8', '#673AB7', '#9C27B0', '#E91E63', '#F06292', '#8E24AA', '#78909C',
+  '#37474F', '#636e72', '#b2bec3', '#ffffff'
+];
 
 export default function ColorPicker({ color, onChange }: ColorPickerProps) {
-  const [hex, setHex] = useState(color.replace('#',''));
-  const { r, g, b } = hexToRgb(hex.padStart(6,'0'));
+  const [hsv, setHsv] = useState(() => {
+    const { r, g, b } = hexToRgb(color.replace('#', '').padStart(6, '0'));
+    return rgbToHsv(r, g, b);
+  });
 
-  const applyHex = useCallback((h: string) => {
-    setHex(h);
-    if (h.length === 6) onChange('#' + h);
-  }, [onChange]);
+  const svRef = useRef<HTMLDivElement>(null);
+  const hueRef = useRef<HTMLDivElement>(null);
+
+  const rgb = useMemo(() => hsvToRgb(hsv.h, hsv.s, hsv.v), [hsv]);
+  const hex = useMemo(() => rgbToHex(rgb.r, rgb.g, rgb.b), [rgb]);
+
+  useEffect(() => {
+    onChange('#' + hex);
+  }, [hex, onChange]);
+
+  const handleSvDown = (e: React.MouseEvent | React.TouchEvent) => {
+    const move = (event: MouseEvent | TouchEvent) => {
+      if (!svRef.current) return;
+      const rect = svRef.current.getBoundingClientRect();
+      const clientX = 'touches' in event ? event.touches[0].clientX : event.clientX;
+      const clientY = 'touches' in event ? event.touches[0].clientY : event.clientY;
+      const s = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+      const v = Math.max(0, Math.min(1, 1 - (clientY - rect.top) / rect.height));
+      setHsv(prev => ({ ...prev, s, v }));
+    };
+    const up = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+      window.removeEventListener('touchmove', move);
+      window.removeEventListener('touchend', up);
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+    window.addEventListener('touchmove', move);
+    window.addEventListener('touchend', up);
+    move(e.nativeEvent as any);
+  };
+
+  const handleHueDown = (e: React.MouseEvent | React.TouchEvent) => {
+    const move = (event: MouseEvent | TouchEvent) => {
+      if (!hueRef.current) return;
+      const rect = hueRef.current.getBoundingClientRect();
+      const clientX = 'touches' in event ? event.touches[0].clientX : event.clientX;
+      const h = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width)) * 360;
+      setHsv(prev => ({ ...prev, h }));
+    };
+    const up = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+      window.removeEventListener('touchmove', move);
+      window.removeEventListener('touchend', up);
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+    window.addEventListener('touchmove', move);
+    window.addEventListener('touchend', up);
+    move(e.nativeEvent as any);
+  };
+
+  const baseHueRgb = hsvToRgb(hsv.h, 1, 1);
+  const baseHueHex = rgbToHex(baseHueRgb.r, baseHueRgb.g, baseHueRgb.b);
 
   return (
     <div className="color-picker-area">
-      <div className="color-row">
-        <span className="toggle-check" id="color-swatch" style={{ background: '#' + hex, border: 'none' }}></span>
-        Color
+      {/* Saturation/Value Canvas */}
+      <div 
+        ref={svRef} 
+        className="sv-canvas" 
+        style={{ backgroundColor: `#${baseHueHex}` }}
+        onMouseDown={handleSvDown}
+        onTouchStart={handleSvDown}
+      >
+        <div className="sv-white-grad" />
+        <div className="sv-black-grad" />
+        <div 
+          className="sv-pointer" 
+          style={{ 
+            left: `${hsv.s * 100}%`, 
+            top: `${(1 - hsv.v) * 100}%`,
+            backgroundColor: `#${hex}`
+          }} 
+        />
       </div>
+
+      {/* Hue Slider */}
+      <div 
+        ref={hueRef} 
+        className="hue-slider"
+        onMouseDown={handleHueDown}
+        onTouchStart={handleHueDown}
+      >
+        <div 
+          className="hue-pointer" 
+          style={{ left: `${(hsv.h / 360) * 100}%` }} 
+        />
+      </div>
+
       <div className="rgba-inputs">
         <div className="rgba-field">
-          <input type="text" id="inp-hex" value={hex} maxLength={6}
-            onChange={e => applyHex(e.target.value)} />
-          <label>Hex</label>
+          <input 
+            type="text" 
+            value={hex.toUpperCase()} 
+            maxLength={6}
+            onChange={e => {
+              const h = e.target.value.replace('#', '');
+              if (h.length === 6) {
+                const { r, g, b } = hexToRgb(h);
+                setHsv(rgbToHsv(r, g, b));
+              }
+            }} 
+          />
+          <label>HEX</label>
         </div>
         <div className="rgba-field">
-          <input type="number" id="inp-r" value={r} min={0} max={255}
-            onChange={e => applyHex(rgbToHex(+e.target.value, g, b))} />
+          <input type="number" value={Math.round(rgb.r)} readOnly />
           <label>R</label>
         </div>
         <div className="rgba-field">
-          <input type="number" id="inp-g" value={g} min={0} max={255}
-            onChange={e => applyHex(rgbToHex(r, +e.target.value, b))} />
+          <input type="number" value={Math.round(rgb.g)} readOnly />
           <label>G</label>
         </div>
         <div className="rgba-field">
-          <input type="number" id="inp-b" value={b} min={0} max={255}
-            onChange={e => applyHex(rgbToHex(r, g, +e.target.value))} />
+          <input type="number" value={Math.round(rgb.b)} readOnly />
           <label>B</label>
         </div>
       </div>
+
       <div className="color-presets">
         {PRESETS.map(p => (
           <span key={p} className="preset"
             style={{ background: p, border: p === '#ffffff' ? '1px solid #ddd' : undefined }}
-            onClick={() => applyHex(p.replace('#',''))}
+            onClick={() => {
+              const { r, g, b } = hexToRgb(p.replace('#', ''));
+              setHsv(rgbToHsv(r, g, b));
+            }}
           />
         ))}
       </div>
-      <div style={{ textAlign: 'center', marginTop: 8 }}>
-        <button style={{ fontSize: 11, padding: '4px 10px', borderRadius: 6, border: '1px solid #ddd', cursor: 'pointer' }}
-          onClick={() => onChange(null)}>
+
+      <div style={{ textAlign: 'center', marginTop: 12 }}>
+        <button 
+          className="reset-btn"
+          onClick={() => onChange(null)}
+        >
           Reset to Default
         </button>
       </div>

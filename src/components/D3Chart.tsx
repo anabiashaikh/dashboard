@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useCallback } from 'react';
+import React, { useEffect, useRef, useCallback, memo } from 'react';
 import * as d3 from 'd3';
 import { ChartConfig, DataPoint } from '@/data/chartsData';
 
@@ -19,15 +19,7 @@ interface D3ChartProps {
   barColor: string | null;
 }
 
-const margin = { top: 60, right: 100, bottom: 50, left: 30 };
-
-function getChartHeight(width: number) {
-  if (width <= 640) return 280;
-  if (width <= 1024) return 380;
-  return 500;
-}
-
-export default function D3Chart({
+const D3ChartComponent = ({
   config,
   isPlaying,
   playIndex,
@@ -38,8 +30,9 @@ export default function D3Chart({
   showLabels,
   showPct,
   showTooltip,
+  showGrid,
   barColor,
-}: D3ChartProps) {
+}: D3ChartProps) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<d3.Selection<SVGGElement, unknown, null, undefined> | null>(null);
   const xRef = useRef<d3.ScaleLinear<number, number> | null>(null);
@@ -66,11 +59,30 @@ export default function D3Chart({
 
     const rect = containerRef.current.getBoundingClientRect();
     const totalWidth = rect.width || 900;
+    const data = config.data;
+
+    const isMobile = totalWidth <= 640;
+    const margin = {
+      top: 80, 
+      right: isMobile ? 45 : 100, 
+      bottom: 50,
+      left: isMobile ? 1 : 30 
+    };
+
+    // Responsive grid height based on screen size
+    let rowHeight = 115; // Desktop (tall)
+    if (totalWidth <= 640) {
+      rowHeight = 70; // Mobile (compact)
+    } else if (totalWidth <= 1024) {
+      rowHeight = 90; // Tablet
+    }
+    const numRows = 4;
+    const innerH = numRows * rowHeight;
+    
     widthRef.current = totalWidth - margin.left - margin.right;
-    heightRef.current = getChartHeight(totalWidth) - margin.top - margin.bottom;
+    heightRef.current = innerH;
     const W = widthRef.current;
     const H = heightRef.current;
-    const data = config.data;
 
     const svgEl = container.append('svg')
       .attr('viewBox', `0 0 ${W + margin.left + margin.right} ${H + margin.top + margin.bottom}`)
@@ -81,80 +93,120 @@ export default function D3Chart({
     const svg = svgEl.append('g').attr('transform', `translate(${margin.left},${margin.top})`);
     svgRef.current = svg;
 
-    const xMin = d3.min(data, d => d.year) ?? 2014;
-    const xMax = d3.max(data, d => d.year) ?? 2030;
-    const x = d3.scaleLinear().domain([xMin, xMax + 0.5]).range([0, W - 20]);
+    const x = d3.scaleBand()
+      .domain(data.map(d => d.year.toString()))
+      .range([0, W])
+      .paddingInner(isMobile ? 0.35 : 0.4) 
+      .paddingOuter(0.2);
+
     const y = d3.scaleLinear().domain([0, config.yMax]).range([H, 0]);
-    xRef.current = x;
+    
+    xRef.current = x as any;
     yRef.current = y;
 
     // Defs / Gradients
     const defs = svgEl.append('defs');
     const pastG = defs.append('linearGradient').attr('id', 'past-gradient')
-      .attr('x1','0%').attr('y1','0%').attr('x2','0%').attr('y2','100%');
-    pastG.append('stop').attr('offset','0%').attr('stop-color', barColor || config.gradients.past.top);
-    pastG.append('stop').attr('offset','100%').attr('stop-color', config.gradients.past.bottom);
+      .attr('x1', '0%').attr('y1', '0%').attr('x2', '0%').attr('y2', '100%');
+    pastG.append('stop').attr('offset', '0%').attr('stop-color', barColor || config.gradients.past.top);
+    pastG.append('stop').attr('offset', '100%').attr('stop-color', config.gradients.past.bottom);
 
     const futG = defs.append('linearGradient').attr('id', 'future-gradient')
-      .attr('x1','0%').attr('y1','0%').attr('x2','0%').attr('y2','100%');
-    futG.append('stop').attr('offset','0%').attr('stop-color', config.gradients.future.top);
-    futG.append('stop').attr('offset','100%').attr('stop-color', config.gradients.future.bottom);
+      .attr('x1', '0%').attr('y1', '0%').attr('x2', '0%').attr('y2', '100%');
+    futG.append('stop').attr('offset', '0%').attr('stop-color', config.gradients.future.top);
+    futG.append('stop').attr('offset', '100%').attr('stop-color', config.gradients.future.bottom);
 
-    // Future overlay
+    // Future overlay & Indicators
     const futureStartIndex = data.findIndex(d => d.status === 'future');
     if (futureStartIndex > 0) {
-      const sepX = (x(data[futureStartIndex - 1].year) + x(data[futureStartIndex].year)) / 2;
-      svg.append('rect').attr('x', sepX).attr('y', -20).attr('width', W - sepX)
-        .attr('height', H + 20).attr('fill', config.gradients.future.bottom).attr('opacity', 0.07);
-      svg.append('line').attr('x1',sepX).attr('x2',sepX).attr('y1',-30).attr('y2',H)
-        .attr('stroke','#e2e8f0').attr('stroke-width',2).attr('stroke-dasharray','5,5');
-      svg.append('text').attr('x', sepX - 10).attr('y', -35).attr('text-anchor','end')
-        .attr('font-size','12px').attr('font-weight','600').attr('fill','#64748b').text('Past');
-      svg.append('text').attr('x', sepX + 10).attr('y', -35).attr('text-anchor','start')
-        .attr('font-size','12px').attr('font-weight','600').attr('fill', config.gradients.future.top).text('Future');
+      const sepX = (x(data[futureStartIndex - 1].year.toString())! + x(data[futureStartIndex].year.toString())!) / 2 + (x.bandwidth() / 2);
+
+      // Background tint
+      svg.append('rect').attr('x', sepX).attr('y', 0).attr('width', W - sepX)
+        .attr('height', H).attr('fill', config.gradients.future.top).attr('opacity', 0.08);
+
+      // Top Border Line for Future Section (at the very top)
+      svg.append('line').attr('x1', sepX).attr('x2', W).attr('y1', 0).attr('y2', 0)
+        .attr('stroke', '#00AD07').attr('stroke-width', 3);
+
+      // Top Arrow (Sharper Triangle)
+      svg.append('path')
+        .attr('d', `M ${W - 4}, 1 L ${W + 4}, 1 L ${W}, -6 Z`)
+        .attr('fill', '#475569');
+
+      // Labels (Moved inside the chart area)
+      svg.append('text').attr('x', sepX - 12).attr('y', 25).attr('text-anchor', 'end')
+        .attr('font-size', '13px').attr('font-weight', '700').attr('fill', '#94a3b8').text('Past');
+      svg.append('text').attr('x', sepX + 12).attr('y', 25).attr('text-anchor', 'start')
+        .attr('font-size', '13px').attr('font-weight', '700').attr('fill', config.gradients.future.top).text('Future');
     }
 
     // Grid
-    svg.append('g').attr('class','grid grid-vertical').attr('transform',`translate(0,${H})`)
-      .call(d3.axisBottom(x).tickValues(data.map(d=>d.year)).tickSize(-H).tickFormat(() => ''))
-      .selectAll('line').attr('stroke','#f8fafc');
+    const vGrid = svg.append('g').attr('class', 'grid grid-vertical').attr('transform', `translate(0,${H})`)
+      .call(d3.axisBottom(x).tickSize(-H).tickFormat(() => ''))
+      .selectAll('line').attr('stroke', '#f8fafc');
     svg.select('.grid-vertical .domain').remove();
+    vGrid.style('display', showGrid ? 'block' : 'none');
 
-    svg.append('g').attr('class','grid grid-horizontal')
-      .call(d3.axisLeft(y).tickSize(-W).tickFormat(() => '').ticks(7))
-      .selectAll('line').attr('stroke','#f1f5f9');
+    // Ticks (Equal distance)
+    const step = config.yMax / numRows;
+    const tickValues = [0, step, step * 2, step * 3, config.yMax];
+
+    const hGrid = svg.append('g').attr('class', 'grid grid-horizontal')
+      .call(d3.axisLeft(y).tickValues(tickValues).tickSize(-W).tickFormat(() => ''))
+      .selectAll('line').attr('stroke', '#f1f5f9');
     svg.select('.grid-horizontal .domain').remove();
+    hGrid.style('display', showGrid ? 'block' : 'none');
 
     // X Axis
-    svg.append('g').attr('transform',`translate(0,${H})`)
-      .call(d3.axisBottom(x).tickSize(0).tickPadding(15).tickFormat(d3.format('d')))
-      .attr('font-family','Inter').attr('font-size','11px').attr('color','#94a3b8')
+    svg.append('g').attr('transform', `translate(0,${H})`)
+      .call(d3.axisBottom(x)
+        // If it's mobile, we also filter the ticks to show every 2nd year to guarantee no merging, while also reducing the font size.
+        .tickValues(isMobile ? x.domain().filter((_, i) => i % 2 === 0) : x.domain())
+        .tickSize(0).tickPadding(isMobile ? 8 : 15))
+      .attr('font-family', 'Inter').attr('font-size', isMobile ? '7.5px' : '11px').attr('font-weight', isMobile ? '500' : '400').attr('color', '#94a3b8')
       .select('.domain').remove();
 
-    // Y Axis
-    svg.append('g').attr('transform',`translate(${W},0)`)
-      .call(d3.axisRight(y).ticks(7)
-        .tickFormat(d => (d as number) === config.yMax ? '' : `$${(d as number).toFixed(1)}B`)
-        .tickSize(0).tickPadding(10))
-      .attr('font-family','Inter').attr('font-size','11px').attr('color','#94a3b8')
+    // Y Axis (Right side for labels)
+    svg.append('g').attr('transform', `translate(${W},0)`)
+      .call(d3.axisRight(y).tickValues(tickValues)
+        .tickFormat(d => {
+          const val = d as number;
+          // Format with decimals if EPS, otherwise integer
+          const isEPS = config.id.includes('eps');
+          const isRatio = config.id.includes('ratio');
+          const unit = (isEPS || isRatio) ? '' : 'B';
+          const formatted = isEPS ? val.toFixed(1) : val.toFixed(0);
+          
+          if (val === config.yMax) return ''; // Hide top tick label as it's the green pill
+          return `$${formatted}${unit}`;
+        })
+        .tickSize(0).tickPadding(isMobile ? 4 : 10))
+      .attr('font-family', 'Inter').attr('font-size', isMobile ? '10px' : '11px').attr('font-weight', isMobile ? '600' : '400').attr('color', '#94a3b8')
       .select('.domain').remove();
 
     // Projection box
     const projY = y(config.projectionTarget);
-    const hG = svg.append('g').attr('transform',`translate(${W + 12},${projY})`);
-    hG.append('rect').attr('x',0).attr('y',-10).attr('width',45).attr('height',20).attr('rx',4)
-      .attr('fill', config.gradients.future.top);
-    hG.append('text').attr('x',5).attr('y',4).attr('fill','white').attr('font-size','10px')
-      .attr('font-weight','700').text(`$${config.projectionTarget}B`);
+
+    // Tiny dash connecting chart to the box
+    svg.append('line')
+      .attr('x1', W).attr('x2', W + 12).attr('y1', projY).attr('y2', projY)
+      .attr('stroke', '#00AD07').attr('stroke-width', 2).attr('stroke-dasharray', '2,2');
+
+    const hG = svg.append('g').attr('transform', `translate(${W + 12},${projY})`);
+    hG.append('rect').attr('x', 0).attr('y', -11).attr('width', 52).attr('height', 22).attr('rx', 11)
+      .attr('fill', '#00AD07');
+    hG.append('text').attr('x', 26).attr('y', 5).attr('fill', 'white').attr('font-size', isMobile ? '10px' : '11px')
+      .attr('text-anchor', 'middle').attr('font-weight', '700').text(`$${config.projectionTarget}B`);
 
     // Bars
-    const barWidth = (W / (data.length - 1)) * 0.7;
+    const barWidth = x.bandwidth();
     svg.selectAll('.bar').data(data).enter().append('rect')
       .attr('class', 'bar')
-      .attr('x', d => x(d.year) - barWidth / 2)
+      .attr('x', d => x(d.year.toString())!)
       .attr('width', barWidth)
       .attr('y', H).attr('height', 0)
-      .attr('rx', 4).attr('ry', 4)
+      .attr('rx', 3).attr('ry', 3)
       .attr('fill', d => d.status === 'past' ? 'url(#past-gradient)' : 'url(#future-gradient)')
       .style('cursor', 'pointer')
       .on('click', (event, d) => {
@@ -165,93 +217,133 @@ export default function D3Chart({
       .attr('y', d => y(d.value))
       .attr('height', d => H - y(d.value));
 
-    // Labels
-    if (showLabels) {
-      svg.selectAll('.bar-label').data(data).enter().append('text')
-        .attr('class','bar-label')
-        .attr('x', d => x(d.year)).attr('y', d => y(d.value) - 20)
-        .attr('text-anchor','middle').attr('font-size','11px').attr('font-weight','700')
-        .attr('fill','#101828').attr('opacity',0)
-        .text(d => `$${Math.round(d.value)}B`)
-        .transition().delay(1000).duration(500).attr('opacity',1);
-    }
+    // Labels (Always rendered, visibility controlled by prop)
+    svg.selectAll('.bar-label').data(data).enter().append('text')
+      .attr('class', 'bar-label')
+      .attr('x', d => x(d.year.toString())! + x.bandwidth() / 2).attr('y', d => y(d.value) - (isMobile ? 13 : 20))
+      .attr('text-anchor', 'middle').attr('font-size', isMobile ? '6.5px' : '11px').attr('font-weight', '700')
+      .attr('fill', '#101828').attr('opacity', showLabels ? 1 : 0)
+      .text(d => `$${Math.round(d.value)}${isMobile ? '' : 'B'}`)
+      .transition().duration(500).attr('opacity', showLabels ? 1 : 0);
 
-    if (showPct) {
-      svg.selectAll('.growth-label').data(data).enter().append('text')
-        .attr('class','growth-label')
-        .attr('x', d => x(d.year)).attr('y', d => y(d.value) - 6)
-        .attr('text-anchor','middle').attr('font-size','10px').attr('font-weight','700')
-        .attr('fill', d => d.growth >= 0 ? '#2ecc71' : '#e74c3c').attr('opacity',0)
-        .text(d => `${d.growth > 0 ? '+' : ''}${d.growth}%`)
-        .transition().delay(1200).duration(500).attr('opacity',1);
-    }
+    svg.selectAll('.growth-label').data(data).enter().append('text')
+      .attr('class', 'growth-label')
+      .attr('x', d => x(d.year.toString())! + x.bandwidth() / 2).attr('y', d => y(d.value) - 6)
+      .attr('text-anchor', 'middle').attr('font-size', isMobile ? '7px' : '10px').attr('font-weight', '700')
+      .attr('fill', d => d.growth >= 0 ? '#2ecc71' : '#e74c3c').attr('opacity', showPct ? 1 : 0)
+      .text(d => `${d.growth > 0 ? '+' : ''}${d.growth}%`);
 
     // Projection line
-    svg.append('line').attr('x1',0).attr('x2',W).attr('y1',projY).attr('y2',projY)
-      .attr('stroke', config.gradients.future.top).attr('stroke-width',1.5)
-      .attr('stroke-dasharray','5,5').attr('opacity',0.3).lower();
+    svg.append('line').attr('x1', 0).attr('x2', W).attr('y1', projY).attr('y2', projY)
+      .attr('stroke', config.gradients.future.top).attr('stroke-width', 1.5)
+      .attr('stroke-dasharray', '5,5').attr('opacity', 0.3).lower();
 
     // Tooltip
     let tooltip = d3.select<HTMLDivElement, unknown>('.d3-tooltip');
     if (tooltip.empty()) {
-      tooltip = d3.select('body').append('div').attr('class','d3-tooltip') as d3.Selection<HTMLDivElement, unknown, HTMLElement, undefined>;
+      tooltip = d3.select('body').append('div').attr('class', 'd3-tooltip') as d3.Selection<HTMLDivElement, unknown, HTMLElement, undefined>;
     }
     tooltipRef.current = tooltip as d3.Selection<HTMLDivElement, unknown, HTMLElement, undefined>;
 
     // Crosshair overlay
-    const overlay = svg.append('rect').attr('width',W).attr('height',H)
-      .attr('fill','transparent').attr('pointer-events','all');
-    const ig = svg.append('g').attr('class','interaction-group').style('pointer-events','none');
-    const vLine = ig.append('line').attr('y1',0).attr('y2',H).attr('stroke','#475569')
-      .attr('stroke-width',1.5).attr('stroke-dasharray','4,4').style('opacity',0);
-    const hLine = ig.append('line').attr('x1',0).attr('x2',W).attr('stroke','#475569')
-      .attr('stroke-width',1.5).attr('stroke-dasharray','4,4').style('opacity',0);
+    const overlay = svg.append('rect').attr('width', W).attr('height', H)
+      .attr('fill', 'transparent').attr('pointer-events', 'all');
+    const ig = svg.append('g').attr('class', 'interaction-group').style('pointer-events', 'none');
+    const vLine = ig.append('line').attr('y1', 0).attr('y2', H).attr('stroke', '#475569')
+      .attr('stroke-width', 1.5).attr('stroke-dasharray', '4,4').style('opacity', 0);
+    const hLine = ig.append('line').attr('x1', 0).attr('x2', W).attr('stroke', '#475569')
+      .attr('stroke-width', 1.5).attr('stroke-dasharray', '4,4').style('opacity', 0);
 
     overlay.on('mousemove', (event: MouseEvent) => {
       const [mx, my] = d3.pointer(event);
-      vLine.raise().attr('x1',mx).attr('x2',mx).attr('y1',0).attr('y2',H).style('opacity',1);
-      hLine.raise().attr('x1',0).attr('x2',W).attr('y1',my).attr('y2',my).style('opacity',1);
-      const currYear = x.invert(mx);
-      const yearInt = Math.round(currYear);
-      const d = data.find(nd => nd.year === yearInt);
-      
+      vLine.raise().attr('x1', mx).attr('x2', mx).attr('y1', 0).attr('y2', H).style('opacity', 1);
+      hLine.raise().attr('x1', 0).attr('x2', W).attr('y1', my).attr('y2', my).style('opacity', 1);
+
+      const domain = x.domain();
+      const range = x.range();
+      const step = x.step();
+      const index = Math.floor((mx - range[0]) / step);
+      const yearStr = domain[index];
+      const d = data.find(nd => nd.year.toString() === yearStr);
+
       if (d) {
         onHoverRef.current?.(d);
       } else {
         onHoverRef.current?.(null);
       }
 
-      svg.selectAll('.bar').classed('bar-highlight', (nd: any) => nd.year === yearInt);
+      svg.selectAll('.bar').classed('bar-highlight', (nd: any) => nd.year.toString() === yearStr);
 
       if (showTooltip && tooltipRef.current && d) {
-        let left = event.pageX + 20;
-        if (left + 180 > window.innerWidth) left = event.pageX - 200;
-        
+        const rect = containerRef.current!.getBoundingClientRect();
+        const barX = x(d.year.toString())!;
+        const barY = y(d.value);
+
+        // Calculate position relative to the page
+        const absoluteX = rect.left + margin.left + barX;
+        const absoluteY = rect.top + margin.top + barY;
+
         const growthColor = d.growth >= 0 ? '#027a48' : '#b42318';
         const growthPrefix = d.growth > 0 ? '+' : '';
 
-        tooltipRef.current.style('display','block').style('opacity','1')
-          .style('position','fixed')
-          .style('left',`${left}px`).style('top',`${event.pageY - 40}px`)
+        // Determine horizontal alignment to keep tooltip in view
+        let leftValue = absoluteX - 100; // Center the 200px width tooltip
+        if (leftValue < 10) leftValue = 10;
+        if (leftValue + 200 > window.innerWidth) leftValue = window.innerWidth - 210;
+
+        tooltipRef.current.style('display', 'block').style('opacity', '1')
+          .style('background', '#ffffff')
+          .style('padding', '12px 16px')
+          .style('border', '1px solid #eaecf0')
+          .style('border-radius', '8px')
+          .style('box-shadow', '0 12px 16px -4px rgba(16, 24, 40, 0.08), 0 4px 6px -2px rgba(16, 24, 40, 0.03)')
+          .style('position', 'fixed')
+          .style('left', `${leftValue}px`)
+          .style('top', `${absoluteY - 110}px`) // Position above the bar
+          .style('transition', 'left 0.1s ease-out, top 0.1s ease-out')
           .html(`
-            <div style="display: grid; grid-template-columns: 1fr auto; gap: 20px; align-items: center;">
-              <span style="color: #667085; font-size: 13px;">Date:</span>
-              <span style="font-weight: 700; color: #101828; font-size: 13px;">Dec 31, ${d.year}</span>
-              <span style="color: #667085; font-size: 13px;">${config.title}:</span>
-              <span style="font-weight: 700; color: #101828; font-size: 13px;">$${d.value.toFixed(1)}B</span>
-              <span style="color: ${growthColor}; font-size: 13px;">% YoY:</span>
-              <span style="font-weight: 700; color: ${growthColor}; font-size: 13px;">${growthPrefix}${d.growth}%</span>
+            <div style="display: flex; flex-direction: column; gap: 8px; min-width: 170px;">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="color: #667085; font-size: 13px; font-weight: 500;">Date:</span>
+                <span style="font-weight: 700; color: #101828; font-size: 13px;">Dec 31, ${d.year}</span>
+              </div>
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="color: #667085; font-size: 13px; font-weight: 500;">${config.title}:</span>
+                <span style="font-weight: 700; color: #101828; font-size: 13px;">$${d.value.toFixed(1)}B</span>
+              </div>
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="color: #667085; font-size: 13px; font-weight: 500;">% YoY:</span>
+                <span style="font-weight: 700; color: ${growthColor}; font-size: 13px;">${growthPrefix}${d.growth}%</span>
+              </div>
             </div>
           `);
       }
     }).on('mouseout', () => {
-      vLine.style('opacity',0);
-      hLine.style('opacity',0);
+      vLine.style('opacity', 0);
+      hLine.style('opacity', 0);
       svg.selectAll('.bar').classed('bar-highlight', false);
-      tooltipRef.current?.style('display','none');
+      tooltipRef.current?.style('display', 'none');
       onHoverRef.current?.(null);
     });
-  }, [config, showLabels, showPct, showTooltip, barColor]);
+  }, [config]); // Critical: buildChart now only depends on structural data
+
+  // Non-destructive style updates effect
+  useEffect(() => {
+    const s = svgRef.current;
+    if (!s) return;
+
+    // Toggle Grid
+    s.selectAll('.grid-vertical').style('display', showGrid ? 'block' : 'none');
+    s.selectAll('.grid-horizontal').style('display', showGrid ? 'block' : 'none');
+
+    // Update Bar Color via Gradient Definition
+    d3.select('#past-gradient stop').attr('stop-color', barColor || config.gradients.past.top);
+
+    // Toggle Labels (immediately, no re-animation)
+    s.selectAll('.bar-label').style('opacity', showLabels ? 1 : 0);
+    s.selectAll('.growth-label').style('opacity', showPct ? 1 : 0);
+
+  }, [showGrid, showLabels, showPct, barColor, config.gradients.past.top]);
 
   // Build chart on mount / config change
   useEffect(() => {
@@ -271,10 +363,32 @@ export default function D3Chart({
       playIntervalRef.current = null;
       isPlayingRef.current = false;
       const svg = svgRef.current;
-      if (svg) {
-        svg.selectAll('.bar').attr('opacity',1);
-        svg.selectAll('.bar-label,.growth-label').attr('opacity',1).attr('transform','translate(0,0)');
+      if (svg && yRef.current && xRef.current) {
+        const y = yRef.current;
+        const H = heightRef.current;
+
+        // Rapidly finish remaining bars with a stagger
+        svg.selectAll('.bar')
+          .interrupt()
+          .transition()
+          .delay((_, i) => Math.max(0, i - playIndexRef.current) * 40)
+          .duration(500)
+          .ease(d3.easeCubicOut)
+          .attr('opacity', 1)
+          .attr('y', (d: any) => y(d.value))
+          .attr('height', (d: any) => H - y(d.value));
+
+        svg.selectAll('.bar-label,.growth-label')
+          .interrupt()
+          .transition()
+          .delay((_, i) => Math.max(0, i - playIndexRef.current) * 40)
+          .duration(500)
+          .ease(d3.easeCubicOut)
+          .attr('opacity', 1)
+          .attr('transform', 'translate(0,0)');
+
         svg.selectAll('.play-callout,.play-ring').remove();
+        onPlayFinishRef.current();
       }
       return;
     }
@@ -285,7 +399,6 @@ export default function D3Chart({
     const svg = svgRef.current;
     const x = xRef.current;
     const y = yRef.current;
-    const W = widthRef.current;
     const H = heightRef.current;
 
     if (!svg || !x || !y) return;
@@ -301,7 +414,7 @@ export default function D3Chart({
         .attr('opacity', 1)
         .attr('y', (d: any) => y(d.value))
         .attr('height', (d: any) => H - y(d.value));
-      
+
       if (showLabels) {
         svg.selectAll('.bar-label').filter((_: any, i: number) => i < playIndex)
           .attr('opacity', 1).attr('transform', 'translate(0,0)');
@@ -312,59 +425,34 @@ export default function D3Chart({
       }
     }
 
-    const stepMs = Math.floor(4000 / data.length);
+    const stepMs = 180; // Faster interval for overlap
+    const rise = 1000;  // Longer, softer rise duration (exceeds stepMs for overlap)
 
     function playStep() {
       const i = playIndexRef.current;
       const d = data[i];
       if (!d || !svgRef.current || !xRef.current || !yRef.current) return;
       const s = svgRef.current, xS = xRef.current, yS = yRef.current;
-      const barX = xS(d.year);
       const barY = yS(d.value);
-      const rise = Math.round(stepMs * 0.82);
-      const lDelay = Math.round(stepMs * 0.35);
-      const cDelay = Math.round(stepMs * 0.20);
+      const lDelay = 150;
 
       s.selectAll('.bar').filter((_: unknown, idx: number) => idx === i)
         .attr('y', H).attr('height', 0).attr('opacity', 0)
-        .attr('fill', (nd: unknown) => (nd as {status:string}).status === 'past' ? 'url(#past-gradient)' : 'url(#future-gradient)')
-        .transition().duration(rise).ease(d3.easeQuadInOut)
+        .attr('fill', (nd: unknown) => (nd as { status: string }).status === 'past' ? 'url(#past-gradient)' : 'url(#future-gradient)')
+        .transition().duration(rise).ease(d3.easeCubicOut)
         .attr('y', barY).attr('height', H - barY).attr('opacity', 1);
 
       s.selectAll('.bar-label').filter((_: unknown, idx: number) => idx === i)
-        .attr('opacity', 0).attr('transform', 'translate(0,14)')
-        .transition().delay(lDelay).duration(rise).ease(d3.easeQuadInOut)
+        .attr('opacity', 0).attr('transform', 'translate(0,10)')
+        .transition().delay(lDelay).duration(rise).ease(d3.easeCubicOut)
         .attr('opacity', 1).attr('transform', 'translate(0,0)');
 
       s.selectAll('.growth-label').filter((_: unknown, idx: number) => idx === i)
-        .attr('opacity', 0).attr('transform', 'translate(0,14)')
-        .transition().delay(lDelay + 40).duration(rise).ease(d3.easeQuadInOut)
+        .attr('opacity', 0).attr('transform', 'translate(0,10)')
+        .transition().delay(lDelay + 50).duration(rise).ease(d3.easeCubicOut)
         .attr('opacity', 1).attr('transform', 'translate(0,0)');
 
       s.selectAll('.play-callout,.play-ring').remove();
-
-      s.append('circle').attr('class', 'play-ring')
-        .attr('cx', barX).attr('cy', H).attr('r', 5)
-        .attr('fill', 'white').attr('stroke', config.gradients.future.top).attr('stroke-width', 2.5).attr('opacity', 0)
-        .transition().duration(rise).ease(d3.easeQuadInOut).attr('cy', barY).attr('opacity', 1)
-        .transition().duration(160).ease(d3.easeBackOut).attr('r', 7)
-        .transition().duration(140).ease(d3.easeQuadInOut).attr('r', 5);
-
-      const cx = Math.min(Math.max(barX, 54), W - 54);
-      const cy = Math.max(barY - 60, 6);
-      const gc = d.growth >= 0 ? '#86efac' : '#fca5a5';
-      const cg = s.append('g').attr('class', 'play-callout').attr('opacity', 0).attr('transform', 'translate(0,18)');
-      cg.append('rect').attr('x', cx - 44).attr('y', cy).attr('width', 88).attr('height', 48).attr('rx', 9)
-        .attr('fill', config.gradients.future.top).attr('opacity', 0.96);
-      cg.append('text').attr('x', cx).attr('y', cy + 14).attr('text-anchor', 'middle').attr('font-size', '10px')
-        .attr('font-weight', '600').attr('fill', 'rgba(255,255,255,0.75)').text(d.year);
-      cg.append('text').attr('x', cx).attr('y', cy + 30).attr('text-anchor', 'middle').attr('font-size', '14px')
-        .attr('font-weight', '800').attr('fill', '#fff').text(`$${Math.round(d.value)}B`);
-      cg.append('text').attr('x', cx).attr('y', cy + 44).attr('text-anchor', 'middle').attr('font-size', '9px')
-        .attr('font-weight', '700').attr('fill', gc).text(`${d.growth >= 0 ? '+' : ''}${d.growth}%`);
-      cg.append('line').attr('x1', cx).attr('x2', barX).attr('y1', cy + 48).attr('y2', barY - 7)
-        .attr('stroke', config.gradients.future.top).attr('stroke-width', 1.5).attr('stroke-dasharray', '3,3').attr('opacity', 0.6);
-      cg.transition().delay(cDelay).duration(rise).ease(d3.easeQuadInOut).attr('opacity', 1).attr('transform', 'translate(0,0)');
     }
 
     playStep();
@@ -374,13 +462,17 @@ export default function D3Chart({
       if (playIndexRef.current >= data.length) {
         clearInterval(playIntervalRef.current!);
         playIntervalRef.current = null;
-        const s = svgRef.current;
-        if (s) {
-          s.selectAll('.bar').attr('opacity', 1);
-          s.selectAll('.bar-label,.growth-label').attr('opacity', 1).attr('transform', 'translate(0,0)');
-          s.selectAll('.play-callout,.play-ring').transition().duration(500).attr('opacity', 0).remove();
-        }
-        onPlayFinishRef.current();
+
+        // Wait for the final rise transition to complete before cleanup
+        setTimeout(() => {
+          const s = svgRef.current;
+          if (s && isPlayingRef.current) { // Check if we haven't already switched views
+            s.selectAll('.bar').interrupt().attr('opacity', 1);
+            s.selectAll('.bar-label,.growth-label').interrupt().attr('opacity', 1).attr('transform', 'translate(0,0)');
+            s.selectAll('.play-callout,.play-ring').transition().duration(500).attr('opacity', 0).remove();
+            onPlayFinishRef.current();
+          }
+        }, rise);
       } else {
         playStep();
       }
@@ -392,4 +484,6 @@ export default function D3Chart({
   }, [isPlaying, config]);
 
   return <div ref={containerRef} style={{ width: '100%' }} />;
-}
+};
+
+export default memo(D3ChartComponent);
